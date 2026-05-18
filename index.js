@@ -138,11 +138,13 @@ app.post('/api/panic', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  await connectDB();
-  console.log(`\n🚀 CrashGuard Backend Running!`);
-  console.log(`📍 URL: http://localhost:${PORT}`);
-  console.log(`🌐 English + Hindi support enabled`);
-  console.log(`💾 Database: ${db ? 'Connected' : 'Not connected (local mode)'}`);
-  console.log(`📡 Ready for frontend requests!\n`);
+
+// Start server immediately (don't wait for database)
+app.listen(PORT, () => {
+    console.log(`🚀 CrashGuard Backend Running!`);
+    console.log(`📍 URL: http://localhost:${PORT}`);
+    console.log(`🌐 English + Hindi support enabled`);
 });
+
+// Connect to database in background
+connectDB();
