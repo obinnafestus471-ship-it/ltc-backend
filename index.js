@@ -1,8 +1,6 @@
 const express = require('express');
 const ccxt = require('ccxt');
-const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios'); // Add this for payment check
+const cors = require('cors');const { createClient } = require('@supabase/supabase-js');xconst axios = require('axios'); // Add this for payment check
 const app = express();
 
 app.use(cors());
