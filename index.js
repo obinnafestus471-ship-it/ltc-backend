@@ -38,7 +38,6 @@ const cache = {
   }
 };
 
-// Helper functions
 function getPriceFromMinutesAgo(symbol, minutes) {
   const now = Date.now();
   const cutoff = now - (minutes * 60 * 1000);
