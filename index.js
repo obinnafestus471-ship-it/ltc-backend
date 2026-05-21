@@ -75,6 +75,212 @@ async function executeStrategy(userId, exchangeId, action, symbol, savedAmount) 
   }
 }
 
+// ============ ENHANCED AI PARSER (UNDERSTANDS 50+ TRADING WORDS) ============
+function parseAiPrompt(prompt) {
+  const rules = {
+    asset: null,
+    condition: null,
+    threshold: null,
+    timeWindow: 15,
+    action: null,
+    logic: null,
+    secondaryAsset: null,
+    secondaryThreshold: null,
+    volumeCondition: null,
+    volumeThreshold: null
+  };
+  
+  const lowerPrompt = prompt.toLowerCase();
+  
+  // ============ STEP 1: AND/OR logic ============
+  if (lowerPrompt.includes(' and ') || lowerPrompt.includes(' && ') || lowerPrompt.includes(' also ')) {
+    rules.logic = 'AND';
+  } else if (lowerPrompt.includes(' or ') || lowerPrompt.includes(' || ')) {
+    rules.logic = 'OR';
+  }
+  
+  // ============ STEP 2: Extract multiple assets ============
+  const assets = [];
+  const assetMatches = prompt.match(/\b(BTC|BITCOIN|ETH|ETHEREUM|SOL|SOLANA|BNB|BINANCE|XRP|DOGE|DOGECOIN|ADA|CARDANO|AVAX|AVALANCHE|MATIC|POLYGON)\b/gi);
+  if (assetMatches) {
+    for (const asset of assetMatches) {
+      let normalized = asset.toUpperCase();
+      if (normalized === 'BITCOIN') normalized = 'BTC';
+      if (normalized === 'ETHEREUM') normalized = 'ETH';
+      if (normalized === 'SOLANA') normalized = 'SOL';
+      if (normalized === 'BINANCE') normalized = 'BNB';
+      if (normalized === 'DOGECOIN') normalized = 'DOGE';
+      if (normalized === 'CARDANO') normalized = 'ADA';
+      if (normalized === 'AVALANCHE') normalized = 'AVAX';
+      if (normalized === 'POLYGON') normalized = 'MATIC';
+      assets.push(normalized);
+    }
+  }
+  rules.asset = assets[0] || null;
+  rules.secondaryAsset = assets[1] || null;
+  
+  // ============ STEP 3: Condition (DROP) - All possible words ============
+  const dropWords = [
+    'drop', 'drops', 'dropped', 'fall', 'falls', 'fell', 'falling',
+    'decrease', 'decreases', 'decreased', 'decline', 'declines', 'declined',
+    'crash', 'crashes', 'crashed', 'crashing', 'plummet', 'plummets', 'plummeted',
+    'tank', 'tanks', 'tanked', 'dump', 'dumps', 'dumped',
+    'dip', 'dips', 'dipped', 'down', 'go down', 'going down', 'went down',
+    'lower', 'lowers', 'lowered', 'sink', 'sinks', 'sank',
+    'slide', 'slides', 'slid', 'slump', 'slumps', 'slumped',
+    'nose dive', 'nosedive', 'plunge', 'plunges', 'plunged'
+  ];
+  
+  // ============ STEP 4: Condition (RISE) - All possible words ============
+  const riseWords = [
+    'rise', 'rises', 'rose', 'rising',
+    'increase', 'increases', 'increased', 'increasing',
+    'up', 'go up', 'going up', 'went up',
+    'pump', 'pumps', 'pumped', 'pumping',
+    'surge', 'surges', 'surged', 'surging',
+    'jump', 'jumps', 'jumped', 'jumping',
+    'climb', 'climbs', 'climbed', 'climbing',
+    'moon', 'moons', 'mooning', 'rocket', 'rockets', 'rocketed',
+    'rally', 'rallies', 'rallied', 'rallying',
+    'gain', 'gains', 'gained', 'gaining',
+    'soar', 'soars', 'soared', 'soaring',
+    'boom', 'booms', 'boomed', 'booming'
+  ];
+  
+  let isDrop = false;
+  let isRise = false;
+  
+  for (const word of dropWords) {
+    if (lowerPrompt.includes(word)) {
+      isDrop = true;
+      break;
+    }
+  }
+  
+  for (const word of riseWords) {
+    if (lowerPrompt.includes(word)) {
+      isRise = true;
+      break;
+    }
+  }
+  
+  if (isDrop) rules.condition = 'drop';
+  else if (isRise) rules.condition = 'rise';
+  
+  // ============ STEP 5: Extract percentages ============
+  const percentMatches = prompt.match(/(\d+)%|(\d+)\s+percent/gi);
+  if (percentMatches) {
+    const firstPercent = percentMatches[0].match(/\d+/);
+    rules.threshold = parseInt(firstPercent[0]);
+    if (percentMatches[1]) {
+      const secondPercent = percentMatches[1].match(/\d+/);
+      if (secondPercent) rules.secondaryThreshold = parseInt(secondPercent[0]);
+    }
+  }
+  
+  // ============ STEP 6: Extract time window ============
+  const timeMatch = prompt.match(/in\s+(\d+)\s+minutes?|(\d+)\s+min|after\s+(\d+)\s+minutes?|(\d+)\s+मिनट/i);
+  if (timeMatch) {
+    rules.timeWindow = parseInt(timeMatch[1] || timeMatch[2] || timeMatch[3] || timeMatch[4]);
+  }
+  
+  const withinMatch = prompt.match(/within\s+(\d+)\s+minutes?/i);
+  if (withinMatch) {
+    rules.timeWindow = parseInt(withinMatch[1]);
+  }
+  
+  // ============ STEP 7: Volume conditions ============
+  const volumeMatch = lowerPrompt.match(/volume.*>\s*(\d+)/i);
+  if (volumeMatch) {
+    rules.volumeCondition = 'greater';
+    rules.volumeThreshold = parseInt(volumeMatch[1]);
+  }
+  
+  // ============ STEP 8: Actions - Close All ============
+  const closeAllWords = [
+    'close all', 'close everything', 'close positions', 'close my positions',
+    'sell all', 'sell everything', 'liquidate', 'liquidate all', 'exit all',
+    'clear all', 'close every', 'sell every', '全部平仓', 'सभी बंद करें',
+    'पोजीशन बंद करें', 'सब बेच दो', 'सब बंद कर दो'
+  ];
+  
+  // ============ STEP 9: Actions - Close Half ============
+  const closeHalfWords = [
+    'close half', 'close 50%', 'sell half', 'sell 50%',
+    'liquidate half', 'close 50 percent', 'close fifty percent',
+    'आधा बंद करें', 'आधा बेच दो', 'पचास प्रतिशत बंद करें'
+  ];
+  
+  // ============ STEP 10: Actions - Stop Loss ============
+  const stopLossWords = [
+    'stop loss', 'stoploss', 'stop-loss', 'set stop loss',
+    'place stop loss', 'add stop loss', 'स्टॉप लॉस', 'स्टॉप लॉस लगाएं'
+  ];
+  
+  // ============ STEP 11: Actions - Hedge ============
+  const hedgeWords = [
+    'hedge', 'hedge position', 'open hedge', 'short',
+    'हेज', 'हेज पोजीशन', 'शॉर्ट'
+  ];
+  
+  // ============ STEP 12: Actions - Alert Only ============
+  const alertWords = [
+    'alert', 'alert only', 'notify', 'notify only', 'just alert',
+    'warn me', 'tell me', 'message me', 'notification only',
+    'केवल अलर्ट', 'सूचना भेजें', 'बस सूचना दो'
+  ];
+  
+  for (const word of closeAllWords) {
+    if (lowerPrompt.includes(word)) {
+      rules.action = 'close_all';
+      break;
+    }
+  }
+  
+  if (!rules.action) {
+    for (const word of closeHalfWords) {
+      if (lowerPrompt.includes(word)) {
+        rules.action = 'close_half';
+        break;
+      }
+    }
+  }
+  
+  if (!rules.action) {
+    for (const word of stopLossWords) {
+      if (lowerPrompt.includes(word)) {
+        rules.action = 'stop_loss';
+        break;
+      }
+    }
+  }
+  
+  if (!rules.action) {
+    for (const word of hedgeWords) {
+      if (lowerPrompt.includes(word)) {
+        rules.action = 'hedge';
+        break;
+      }
+    }
+  }
+  
+  if (!rules.action) {
+    for (const word of alertWords) {
+      if (lowerPrompt.includes(word)) {
+        rules.action = 'alert_only';
+        break;
+      }
+    }
+  }
+  
+  if (!rules.action) {
+    rules.action = 'close_all';
+  }
+  
+  console.log('📝 Parsed AI prompt:', rules);
+  return rules;
+}
+
 // ============ PAYMENT CHECK ============
 app.get('/api/check-payment/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -100,7 +306,7 @@ app.get('/api/check-payment/:userId', async (req, res) => {
   }
 });
 
-// ============ PRICE MONITORING ============
+// ============ PRICE MONITORING (WATCHES ANY ASSET) ============
 async function monitorPrices() {
   const now = new Date();
   console.log(`🔍 [${now.toISOString()}] Checking prices...`);
@@ -111,18 +317,25 @@ async function monitorPrices() {
     .eq('is_active', true)
     .lt('last_checked', new Date(Date.now() - 5 * 60 * 1000).toISOString());
   
-  if (error || !strategies || strategies.length === 0) {
+  if (error) {
+    console.log('Error fetching strategies:', error.message);
+    return;
+  }
+  
+  if (!strategies || strategies.length === 0) {
     console.log('No active strategies to check');
     return;
   }
   
   console.log(`📋 Checking ${strategies.length} active strategies`);
   
-  const exchanges = ['binance', 'bybit', 'okx'];
   const neededAssets = new Set();
   for (const strategy of strategies) {
     if (strategy.parsed_strategy && strategy.parsed_strategy.asset) {
       neededAssets.add(strategy.parsed_strategy.asset);
+    }
+    if (strategy.parsed_strategy && strategy.parsed_strategy.secondaryAsset) {
+      neededAssets.add(strategy.parsed_strategy.secondaryAsset);
     }
   }
   
@@ -131,8 +344,15 @@ async function monitorPrices() {
     neededSymbols.push(`${asset}/USDT`);
   }
   
-  if (neededSymbols.length === 0) return;
-
+  if (neededSymbols.length === 0) {
+    console.log('No assets to monitor');
+    return;
+  }
+  
+  console.log(`📊 Watching prices for: ${neededSymbols.join(', ')}`);
+  
+  const exchanges = ['binance', 'bybit', 'okx'];
+  
   for (const exchangeId of exchanges) {
     try {
       const exchange = new ccxt[exchangeId]();
@@ -142,12 +362,17 @@ async function monitorPrices() {
         let currentPrice = cache.get(exchangeId, symbol);
         
         if (currentPrice === null) {
-          const ticker = await exchange.fetchTicker(symbol);
-          currentPrice = ticker.last;
-          cache.set(exchangeId, symbol, currentPrice);
-          console.log(`📡 Fetched ${exchangeId} ${symbol}: $${currentPrice}`);
+          try {
+            const ticker = await exchange.fetchTicker(symbol);
+            currentPrice = ticker.last;
+            cache.set(exchangeId, symbol, currentPrice);
+            console.log(`📡 Fetched ${exchangeId} ${symbol}: $${currentPrice}`);
+          } catch (fetchError) {
+            console.log(`Failed to fetch ${exchangeId} ${symbol}:`, fetchError.message);
+            continue;
+          }
         } else {
-          console.log(`💾 Cached ${exchangeId} ${symbol}: $${currentPrice}`);
+          console.log(`💾 Using cached price for ${exchangeId} ${symbol}: $${currentPrice}`);
         }
         
         const asset = symbol.split('/')[0];
@@ -160,11 +385,37 @@ async function monitorPrices() {
           const oldPrice = getPriceFromMinutesAgo(asset, parsed.timeWindow);
           if (!oldPrice) continue;
           
-          const dropPercent = ((oldPrice - currentPrice) / oldPrice) * 100;
+          let dropPercent = ((oldPrice - currentPrice) / oldPrice) * 100;
           
-          if (parsed.condition === 'drop' && dropPercent >= parsed.threshold) {
-            console.log(`🚨 CRASH! ${asset} dropped ${dropPercent.toFixed(2)}%`);
-            const savedAmount = 1000 * (dropPercent / 100);
+          let shouldExecute = false;
+          
+          if (parsed.logic === 'AND' && parsed.secondaryAsset) {
+            const secondaryOldPrice = getPriceFromMinutesAgo(parsed.secondaryAsset, parsed.timeWindow);
+            if (secondaryOldPrice) {
+              const secondaryCurrentPrice = priceHistory[parsed.secondaryAsset]?.slice(-1)[0]?.price || currentPrice;
+              const secondaryDropPercent = ((secondaryOldPrice - secondaryCurrentPrice) / secondaryOldPrice) * 100;
+              shouldExecute = (dropPercent >= parsed.threshold && secondaryDropPercent >= parsed.secondaryThreshold);
+            }
+          } else if (parsed.logic === 'OR' && parsed.secondaryAsset) {
+            const secondaryOldPrice = getPriceFromMinutesAgo(parsed.secondaryAsset, parsed.timeWindow);
+            if (secondaryOldPrice) {
+              const secondaryCurrentPrice = priceHistory[parsed.secondaryAsset]?.slice(-1)[0]?.price || currentPrice;
+              const secondaryDropPercent = ((secondaryOldPrice - secondaryCurrentPrice) / secondaryOldPrice) * 100;
+              shouldExecute = (dropPercent >= parsed.threshold || secondaryDropPercent >= parsed.secondaryThreshold);
+            }
+          } else {
+            shouldExecute = (parsed.condition === 'drop' && dropPercent >= parsed.threshold);
+          }
+          
+          if (shouldExecute) {
+            console.log(`🚨 CRASH DETECTED! ${asset} dropped ${dropPercent.toFixed(2)}% in ${parsed.timeWindow} minutes`);
+            const estimatedPositionValue = 1000;
+            let savedAmount = estimatedPositionValue * (dropPercent / 100);
+            
+            if (parsed.action === 'close_half') {
+              savedAmount = savedAmount / 2;
+            }
+            
             await executeStrategy(strategy.user_id, exchangeId, parsed.action, asset, savedAmount);
           }
         }
@@ -176,6 +427,7 @@ async function monitorPrices() {
           .update({ last_checked: new Date().toISOString() })
           .eq('id', strategy.id);
       }
+      
     } catch (error) {
       console.log(`Error with ${exchangeId}:`, error.message);
     }
@@ -183,7 +435,7 @@ async function monitorPrices() {
 }
 
 setInterval(monitorPrices, 120000);
-console.log('🚀 Price monitoring started! Every 2 minutes');
+console.log('🚀 Price monitoring started! Checking every 2 minutes');
 setTimeout(() => monitorPrices(), 5000);
 
 // ============ API ENDPOINTS ============
@@ -192,7 +444,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/api/status', (req, res) => {
-  res.json({ status: 'online', time: new Date().toISOString() });
+  res.json({ status: 'online', auto_monitor: 'active', watches: 'dynamic assets', time: new Date().toISOString() });
 });
 
 app.post('/api/connect', async (req, res) => {
@@ -219,22 +471,6 @@ app.post('/api/connect', async (req, res) => {
     res.json({ success: false, error: error.message });
   }
 });
-
-function parseAiPrompt(prompt) {
-  const rules = { asset: null, condition: null, threshold: null, timeWindow: 15, action: null };
-  const assetMatch = prompt.match(/\b(BTC|ETH|SOL|BNB|XRP|DOGE|ADA|AVAX|MATIC)\b/i);
-  if (assetMatch) rules.asset = assetMatch[1].toUpperCase();
-  if (prompt.match(/drop|falls|decrease|गिरावट|गिरता|नीचे/i)) rules.condition = 'drop';
-  else if (prompt.match(/rise|up|increase|बढ़त|उपर|बढ़ता/i)) rules.condition = 'rise';
-  const percentMatch = prompt.match(/(\d+)%/i);
-  if (percentMatch) rules.threshold = parseInt(percentMatch[1]);
-  const timeMatch = prompt.match(/in\s+(\d+)\s+minutes?|(\d+)\s+मिनट/i);
-  if (timeMatch) rules.timeWindow = parseInt(timeMatch[1] || timeMatch[2]);
-  if (prompt.match(/close all|close everything|close positions|सभी बंद करें|पोजीशन बंद करें/i)) rules.action = 'close_all';
-  else if (prompt.match(/stop loss|stoploss|स्टॉप लॉस/i)) rules.action = 'stop_loss';
-  else if (prompt.match(/hedge|हेज/i)) rules.action = 'hedge';
-  return rules;
-}
 
 app.post('/api/strategy/save', async (req, res) => {
   const { userId, aiPrompt, exchange } = req.body;
@@ -298,5 +534,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 CrashGuard Backend Running on port ${PORT}`);
   console.log(`🌐 English + Hindi support enabled`);
+  console.log(`📊 Dynamic price monitoring: ACTIVE (watches user-specified assets)`);
+  console.log(`🧠 Enhanced AI parser: 50+ trading keywords, AND/OR logic, multiple assets`);
   console.log(`💳 Payment check: /api/check-payment/:userId`);
 });
