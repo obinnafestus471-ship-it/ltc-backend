@@ -16,6 +16,67 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Your TON wallet
 const YOUR_WALLET = 'UQD3d5ZMqpheS51qbgB3A04jrf3pI2V0vXffr3Lu1rbEy7wF';
 
+// Store user API keys in memory (for auto-close)
+const userApiKeys = {};
+
+// Save API key when user connects
+async function saveApiKey(userId, exchange, apiKey, secret) {
+  userApiKeys[`${userId}_${exchange}`] = { apiKey, secret };
+  try {
+    await supabase.from('connections').upsert({ 
+      user_id: userId, 
+      exchange, 
+      api_key: apiKey, 
+      secret: secret 
+    });
+    console.log(`✅ API key saved for ${userId} on ${exchange}`);
+  } catch(e) { 
+    console.log("Save key error:", e.message); 
+  }
+}
+
+// Get API key when needed for auto-close
+async function getApiKey(userId, exchange) {
+  const cached = userApiKeys[`${userId}_${exchange}`];
+  if (cached) return cached;
+  try {
+    const { data } = await supabase.from('connections')
+      .select('api_key, secret')
+      .eq('user_id', userId)
+      .eq('exchange', exchange)
+      .single();
+    if (data) {
+      userApiKeys[`${userId}_${exchange}`] = data;
+      return data;
+    }
+    return null;
+  } catch(e) { 
+    return null; 
+  }
+}
+
+// AUTO-CLOSE FUNCTION - Closes positions automatically when market crashes
+async function closeUserPositions(userId, exchangeId, symbol, amount) {
+  try {
+    const keys = await getApiKey(userId, exchangeId);
+    if (!keys || !keys.api_key) {
+      console.log(`⚠️ No API keys for user ${userId} on ${exchangeId}`);
+      return false;
+    }
+    const exchange = new ccxt[exchangeId]({ 
+      apiKey: keys.api_key, 
+      secret: keys.secret 
+    });
+    exchange.enableRateLimit = true;
+    const order = await exchange.createMarketSellOrder(symbol, amount);
+    console.log(`✅ AUTO-CLOSED: ${amount} ${symbol} for user ${userId} | Order ID: ${order.id}`);
+    return true;
+  } catch (err) {
+    console.log(`❌ Auto-close failed for ${userId}: ${err.message}`);
+    return false;
+  }
+}
+
 // Price history storage
 const priceHistory = {};
 const priceCache = {};
@@ -57,10 +118,13 @@ function addToPriceHistory(symbol, price) {
   priceHistory[symbol] = priceHistory[symbol].filter(p => p.timestamp > cutoff);
 }
 
+// Execute strategy when crash detected - NOW WITH AUTO-CLOSE!
 async function executeStrategy(userId, exchangeId, action, symbol, savedAmount) {
   try {
     const feeDue = savedAmount * 0.1;
     const netSaved = savedAmount - feeDue;
+    
+    // Save to database
     await supabase.from('panic_logs').insert({
       user_id: userId,
       exchange: exchangeId,
@@ -69,6 +133,15 @@ async function executeStrategy(userId, exchangeId, action, symbol, savedAmount) 
       net_saved: netSaved,
       timestamp: new Date()
     });
+    
+    // AUTO-CLOSE: Close positions automatically if action is close_all or close_half
+    if (action === 'close_all' || action === 'close_half') {
+      let amount = 1000; // Default position size in USDT
+      if (action === 'close_half') amount = amount / 2;
+      await closeUserPositions(userId, exchangeId, symbol, amount);
+      console.log(`🛡️ GUARD EXECUTED: Auto-closed ${amount} ${symbol} for user ${userId}`);
+    }
+    
     console.log(`✅ Saved user ${userId}: $${savedAmount}, Fee: $${feeDue}`);
   } catch (error) {
     console.log(`❌ Failed:`, error.message);
@@ -416,6 +489,7 @@ async function monitorPrices() {
               savedAmount = savedAmount / 2;
             }
             
+            // This will now AUTO-CLOSE positions if action is close_all or close_half
             await executeStrategy(strategy.user_id, exchangeId, parsed.action, asset, savedAmount);
           }
         }
@@ -436,20 +510,21 @@ async function monitorPrices() {
 
 setInterval(monitorPrices, 120000);
 console.log('🚀 Price monitoring started! Checking every 2 minutes');
+console.log('🤖 AUTO-CLOSE is ACTIVE! Positions will close automatically when crash detected');
 setTimeout(() => monitorPrices(), 5000);
 
 // ============ API ENDPOINTS ============
 app.get('/', (req, res) => {
-  res.json({ message: 'CrashGuard Backend Dey Work! 🚀', status: 'online' });
+  res.json({ message: 'CrashGuard Backend Dey Work! 🚀', status: 'online', auto_close: 'active' });
 });
 
 app.get('/api/status', (req, res) => {
-  res.json({ status: 'online', auto_monitor: 'active', watches: 'dynamic assets', time: new Date().toISOString() });
+  res.json({ status: 'online', auto_monitor: 'active', auto_close: 'active', watches: 'dynamic assets', time: new Date().toISOString() });
 });
 
 app.post('/api/connect', async (req, res) => {
   const { exchange, apiKey, secret, userId } = req.body;
-  if (!exchange || !apiKey || !secret) {
+  if (!exchange || !apiKey || !secret || !userId) {
     return res.json({ success: false, error: 'Missing required fields' });
   }
   try {
@@ -465,8 +540,10 @@ app.post('/api/connect', async (req, res) => {
         } catch (e) {}
       }
     }
+    // Save API key for auto-close
+    await saveApiKey(userId, exchange, apiKey, secret);
     await supabase.from('connections').upsert({ user_id: userId, exchange, balance: totalBalance, balance_usd: totalBalanceUSD });
-    res.json({ success: true, balance: totalBalance, balanceUSD: totalBalanceUSD });
+    res.json({ success: true, balance: totalBalance, balanceUSD: totalBalanceUSD, message: 'Connected! Auto-close is now active.' });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
@@ -487,15 +564,16 @@ app.post('/api/strategy/save', async (req, res) => {
     last_checked: new Date().toISOString(),
     updated_at: new Date()
   });
-  res.json({ success: true, message: 'Strategy saved', parsed });
+  res.json({ success: true, message: 'Strategy saved! Auto-close will trigger when condition met.', parsed });
 });
 
 app.post('/api/panic', async (req, res) => {
   const { exchange, apiKey, secret, userId } = req.body;
-  if (!exchange || !apiKey || !secret) {
+  if (!exchange || !apiKey || !secret || !userId) {
     return res.json({ success: false, error: 'Missing exchange, apiKey, or secret' });
   }
   try {
+    await saveApiKey(userId, exchange, apiKey, secret);
     const exchangeObj = new ccxt[exchange]({ apiKey, secret });
     const positions = await exchangeObj.fetchPositions();
     let savedAmount = 0;
@@ -535,6 +613,7 @@ app.listen(PORT, () => {
   console.log(`🚀 CrashGuard Backend Running on port ${PORT}`);
   console.log(`🌐 English + Hindi support enabled`);
   console.log(`📊 Dynamic price monitoring: ACTIVE (watches user-specified assets)`);
+  console.log(`🤖 AUTO-CLOSE: ACTIVE - Positions will close automatically when crash detected!`);
   console.log(`🧠 Enhanced AI parser: 50+ trading keywords, AND/OR logic, multiple assets`);
   console.log(`💳 Payment check: /api/check-payment/:userId`);
 });
